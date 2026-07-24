@@ -4,9 +4,9 @@ import pytz
 import streamlit as st
 from supabase import create_client
 
-# 1. 頁面基本設定
+# 1. 頁面基本設定 (使用 wide 寬頁面，配合欄位排版)
 st.set_page_config(
-    page_title="白卡借用系統", page_icon="💳", layout="centered"
+    page_title="白卡借用系統", page_icon="💳", layout="wide"
 )
 
 # 2. 初始化 Supabase 連線
@@ -21,7 +21,26 @@ except Exception as e:
 TAIPEI_TZ = pytz.timezone("Asia/Taipei")
 
 
-# 3. 載入員工名單 (增加讀取與清理邏輯)
+# 時間格式化輔助函式
+def format_time_str(time_str):
+    if not time_str:
+        return "-"
+    try:
+        # 去除 T 與時區尾綴 (+00:00)
+        clean_str = (
+            str(time_str)
+            .replace("T", " ")
+            .split("+")[0]
+            .split(".")[0]
+            .strip()
+        )
+        dt = datetime.fromisoformat(clean_str)
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return str(time_str).replace("T", " ")[:19]
+
+
+# 3. 載入員工名單
 @st.cache_data
 def load_employees():
     try:
@@ -64,11 +83,11 @@ def get_cards():
 
 
 def borrow_card(card_id, borrower, note, custom_time):
-    sys_now = datetime.now(TAIPEI_TZ).isoformat()
+    sys_now = datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M:%S")
     event_time = (
         custom_time.strftime("%Y-%m-%d %H:%M:%S")
         if custom_time
-        else datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        else sys_now
     )
 
     supabase.table("cards").update(
@@ -93,11 +112,11 @@ def borrow_card(card_id, borrower, note, custom_time):
 
 
 def return_card(card_id, borrower, note, custom_time):
-    sys_now = datetime.now(TAIPEI_TZ).isoformat()
+    sys_now = datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M:%S")
     event_time = (
         custom_time.strftime("%Y-%m-%d %H:%M:%S")
         if custom_time
-        else datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        else sys_now
     )
 
     supabase.table("cards").update(
@@ -130,94 +149,102 @@ with tab1:
     cards = get_cards()
     if not cards:
         st.info("💡 目前資料庫中沒有卡片資料，請確認 Supabase 的 cards 資料表。")
+    else:
+        # 使用 3 欄式佈局，讓卡片並排顯示，減少向下滾動
+        cols = st.columns(min(len(cards), 3))
 
-    for card in cards:
-        card_id = card["card_id"]
-        status = card["status"]
-        borrower = card["borrower"]
-        borrowed_at = card["borrowed_at"]
-        note = card.get("note")
+        for idx, card in enumerate(cards):
+            card_id = card["card_id"]
+            status = card["status"]
+            borrower = card["borrower"]
+            borrowed_at = format_time_str(card.get("borrowed_at"))
+            note = card.get("note")
 
-        if status == "AVAILABLE":
-            with st.container(border=True):
-                st.subheader(f"🟢 {card_id}（可借用）")
-                with st.form(key=f"borrow_form_{card_id}"):
-                    if EMP_LIST:
-                        borrower_selected = st.selectbox(
-                            "選擇工號與姓名",
-                            options=["-- 請選擇工號與姓名 --"] + EMP_LIST,
-                            key=f"select_{card_id}",
-                        )
-                    else:
-                        borrower_selected = st.text_input(
-                            "請輸入工號與姓名", key=f"input_{card_id}"
-                        )
+            col = cols[idx % 3]
 
-                    note_input = st.text_input(
-                        "📝 備註 (如：訪客姓名 / 補登說明)",
-                        key=f"note_{card_id}",
-                    )
+            with col:
+                if status == "AVAILABLE":
+                    with st.container(border=True):
+                        st.subheader(f"🟢 {card_id}")
+                        st.caption("狀態：可借用")
 
-                    col1, col2 = st.columns([1, 1])
-                    with col1:
-                        use_custom = st.checkbox(
-                            "⏰ 自訂實際借用時間", key=f"chk_{card_id}"
-                        )
-                    with col2:
-                        custom_dt = None
-                        if use_custom:
-                            custom_dt = st.datetime_input(
-                                "選擇時間", key=f"dt_{card_id}"
+                        with st.form(key=f"borrow_form_{card_id}"):
+                            if EMP_LIST:
+                                borrower_selected = st.selectbox(
+                                    "選擇工號與姓名",
+                                    options=["-- 請選擇工號與姓名 --"]
+                                    + EMP_LIST,
+                                    key=f"select_{card_id}",
+                                )
+                            else:
+                                borrower_selected = st.text_input(
+                                    "請輸入工號與姓名",
+                                    key=f"input_{card_id}",
+                                )
+
+                            note_input = st.text_input(
+                                "📝 備註 (選填)", key=f"note_{card_id}"
                             )
 
-                    submit = st.form_submit_button("確認借用")
-                    if submit:
-                        if (
-                            borrower_selected == "-- 請選擇工號與姓名 --"
-                            or not borrower_selected
-                        ):
-                            st.warning("⚠️ 請選擇或輸入借用人！")
-                        else:
-                            borrow_card(
-                                card_id,
-                                borrower_selected,
-                                note_input,
-                                custom_dt,
+                            use_custom = st.checkbox(
+                                "⏰ 補登實際借用時間", key=f"chk_{card_id}"
                             )
-                            st.success(f"✅ {card_id} 借用成功！")
-                            st.rerun()
-        else:
-            with st.container(border=True):
-                st.subheader(f"🔴 {card_id}（借出中）")
-                st.write(
-                    f"👤 **借用人**：{borrower} "
-                    + (f"（備註：{note}）" if note else "")
-                )
-                st.write(f"🕒 **借用時間**：{borrowed_at}")
+                            custom_dt = None
+                            if use_custom:
+                                custom_dt = st.datetime_input(
+                                    "選擇時間", key=f"dt_{card_id}"
+                                )
 
-                with st.form(key=f"return_form_{card_id}"):
-                    return_note = st.text_input(
-                        "📝 歸還備註 (選填)", key=f"r_note_{card_id}"
-                    )
-                    col1, col2 = st.columns([1, 1])
-                    with col1:
-                        use_custom_r = st.checkbox(
-                            "⏰ 自訂實際歸還時間", key=f"r_chk_{card_id}"
-                        )
-                    with col2:
-                        custom_dt_r = None
-                        if use_custom_r:
-                            custom_dt_r = st.datetime_input(
-                                "選擇時間", key=f"r_dt_{card_id}"
+                            submit = st.form_submit_button(
+                                "確認借用", use_container_width=True
                             )
+                            if submit:
+                                if (
+                                    borrower_selected
+                                    == "-- 請選擇工號與姓名 --"
+                                    or not borrower_selected
+                                ):
+                                    st.warning("⚠️ 請選擇或輸入借用人！")
+                                else:
+                                    borrow_card(
+                                        card_id,
+                                        borrower_selected,
+                                        note_input,
+                                        custom_dt,
+                                    )
+                                    st.success(f"✅ {card_id} 借用成功！")
+                                    st.rerun()
+                else:
+                    with st.container(border=True):
+                        st.subheader(f"🔴 {card_id}")
+                        st.caption("狀態：借出中")
+                        st.markdown(f"👤 **借用人**：{borrower}")
+                        if note:
+                            st.markdown(f"📝 **備註**：{note}")
+                        st.markdown(f"🕒 **借用時間**：\n`{borrowed_at}`")
 
-                    submit_r = st.form_submit_button("歸還卡片")
-                    if submit_r:
-                        return_card(
-                            card_id, borrower, return_note, custom_dt_r
-                        )
-                        st.success(f"✅ {card_id} 已成功歸還！")
-                        st.rerun()
+                        with st.form(key=f"return_form_{card_id}"):
+                            return_note = st.text_input(
+                                "📝 歸還備註 (選填)", key=f"r_note_{card_id}"
+                            )
+                            use_custom_r = st.checkbox(
+                                "⏰ 補登實際歸還時間", key=f"r_chk_{card_id}"
+                            )
+                            custom_dt_r = None
+                            if use_custom_r:
+                                custom_dt_r = st.datetime_input(
+                                    "選擇時間", key=f"r_dt_{card_id}"
+                                )
+
+                            submit_r = st.form_submit_button(
+                                "歸還卡片", use_container_width=True
+                            )
+                            if submit_r:
+                                return_card(
+                                    card_id, borrower, return_note, custom_dt_r
+                                )
+                                st.success(f"✅ {card_id} 已成功歸還！")
+                                st.rerun()
 
 with tab2:
     st.subheader("📜 歷史借還紀錄 (前50筆)")
@@ -235,9 +262,9 @@ with tab2:
             for log in logs_res.data:
                 formatted_logs.append(
                     {
-                        "實際借還時間": log.get("timestamp", ""),
-                        "系統填單時間": log.get(
-                            "created_at", log.get("timestamp", "")
+                        "實際借還時間": format_time_str(log.get("timestamp")),
+                        "系統填單時間": format_time_str(
+                            log.get("created_at", log.get("timestamp"))
                         ),
                         "卡號": log.get("card_id", ""),
                         "工號與姓名": log.get("borrower", ""),
