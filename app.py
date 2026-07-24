@@ -21,12 +21,11 @@ except Exception as e:
 TAIPEI_TZ = pytz.timezone("Asia/Taipei")
 
 
-# 3. 載入員工名單 (加強防呆)
+# 3. 載入員工名單 (增加讀取與清理邏輯)
 @st.cache_data
 def load_employees():
     try:
         df = pd.read_excel("employees.xlsx")
-        # 自動轉字串並過濾空白
         df["工號"] = df["工號"].astype(str).str.strip()
         df["姓名"] = df["姓名"].astype(str).str.strip()
         df = df[
