@@ -6,7 +6,7 @@ from supabase import create_client
 
 # 1. 頁面基本設定
 st.set_page_config(
-    page_title="辦公室備用卡管理系統", page_icon="💳", layout="centered"
+    page_title="白卡借用系統", page_icon="💳", layout="centered"
 )
 
 # 2. 初始化 Supabase 連線
@@ -14,44 +14,55 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# 設為台北時區
 TAIPEI_TZ = pytz.timezone("Asia/Taipei")
 
 
-# 3. 載入員工工號對照表 (使用 cache 避免重複讀取)
+# 3. 載入員工名單
 @st.cache_data
-def load_employee_data():
+def load_employees():
     try:
         df = pd.read_excel("employees.xlsx")
-        # 轉成字串並去除前後空格
         df["工號"] = df["工號"].astype(str).str.strip()
         df["姓名"] = df["姓名"].astype(str).str.strip()
-        # 轉成字典方便快速查找: {'E001': '王小明', ...}
-        emp_dict = dict(zip(df["工號"], df["姓名"]))
-        return emp_dict
+        df = df[(df["工號"] != "nan") & (df["姓名"] != "nan")]
+        emp_list = [
+            f"{row['工號']} - {row['姓名']}" for _, row in df.iterrows()
+        ]
+        return emp_list
     except Exception as e:
-        st.error(f"讀取 employees.xlsx 失敗，請確認檔案格式是否正確：{e}")
-        return {}
+        st.error(f"⚠️ 讀取 employees.xlsx 失敗: {e}")
+        return []
 
 
-EMP_DICT = load_employee_data()
+EMP_LIST = load_employees()
 
 
 # --- 輔助函式 ---
 def get_cards():
-    response = (
+    res = (
         supabase.table("cards")
         .select("*")
         .order("card_id", desc=False)
         .execute()
     )
-    return response.data
+    return res.data
 
 
-def borrow_card(card_id, borrower):
-    now_iso = datetime.now(TAIPEI_TZ).isoformat()
+def borrow_card(card_id, borrower, note, custom_time):
+    sys_now = datetime.now(TAIPEI_TZ).isoformat()
+    event_time = (
+        custom_time.strftime("%Y-%m-%d %H:%M:%S")
+        if custom_time
+        else datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    )
+
     supabase.table("cards").update(
-        {"status": "BORROWED", "borrower": borrower, "borrowed_at": now_iso}
+        {
+            "status": "BORROWED",
+            "borrower": borrower,
+            "borrowed_at": event_time,
+            "note": note,
+        }
     ).eq("card_id", card_id).execute()
 
     supabase.table("borrow_logs").insert(
@@ -59,15 +70,28 @@ def borrow_card(card_id, borrower):
             "card_id": card_id,
             "borrower": borrower,
             "action": "BORROW",
-            "timestamp": now_iso,
+            "timestamp": event_time,
+            "created_at": sys_now,
+            "note": note,
         }
     ).execute()
 
 
-def return_card(card_id, borrower):
-    now_iso = datetime.now(TAIPEI_TZ).isoformat()
+def return_card(card_id, borrower, note, custom_time):
+    sys_now = datetime.now(TAIPEI_TZ).isoformat()
+    event_time = (
+        custom_time.strftime("%Y-%m-%d %H:%M:%S")
+        if custom_time
+        else datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    )
+
     supabase.table("cards").update(
-        {"status": "AVAILABLE", "borrower": None, "borrowed_at": None}
+        {
+            "status": "AVAILABLE",
+            "borrower": None,
+            "borrowed_at": None,
+            "note": None,
+        }
     ).eq("card_id", card_id).execute()
 
     supabase.table("borrow_logs").insert(
@@ -75,23 +99,15 @@ def return_card(card_id, borrower):
             "card_id": card_id,
             "borrower": borrower,
             "action": "RETURN",
-            "timestamp": now_iso,
+            "timestamp": event_time,
+            "created_at": sys_now,
+            "note": note,
         }
     ).execute()
 
 
-def format_time(time_str):
-    if not time_str:
-        return ""
-    try:
-        dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
-        return dt.astimezone(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return time_str
-
-
 # --- 主介面 ---
-st.title("💳 辦公室備用卡管理系統")
+st.title("💳 白卡借用系統")
 
 tab1, tab2 = st.tabs(["📌 卡片借還", "📜 歷史紀錄"])
 
@@ -101,49 +117,89 @@ with tab1:
         card_id = card["card_id"]
         status = card["status"]
         borrower = card["borrower"]
-        borrowed_at = format_time(card["borrowed_at"])
+        borrowed_at = card["borrowed_at"]
+        note = card.get("note")
 
         if status == "AVAILABLE":
             with st.container(border=True):
                 st.subheader(f"🟢 {card_id}（可借用）")
                 with st.form(key=f"borrow_form_{card_id}"):
-                    emp_id_input = (
-                        st.text_input(
-                            "請輸入工號",
-                            placeholder="例如：E001",
-                            key=f"input_{card_id}",
-                        )
-                        .strip()
-                        .upper()
+                    borrower_selected = st.selectbox(
+                        "選擇工號與姓名",
+                        options=["-- 請選擇工號與姓名 --"] + EMP_LIST,
+                        key=f"select_{card_id}",
                     )
-                    submit = st.form_submit_button("確認借用")
+                    note_input = st.text_input(
+                        "📝 備註 (如：訪客姓名 / 補登說明)",
+                        key=f"note_{card_id}",
+                    )
 
+                    col1, col2 = st.columns([1, 1])
+                    with col1:
+                        use_custom = st.checkbox(
+                            "⏰ 自訂實際借用時間", key=f"chk_{card_id}"
+                        )
+                    with col2:
+                        custom_dt = None
+                        if use_custom:
+                            custom_dt = st.datetime_input(
+                                "選擇時間", key=f"dt_{card_id}"
+                            )
+
+                    submit = st.form_submit_button("確認借用")
                     if submit:
-                        if not emp_id_input:
-                            st.warning("⚠️ 請輸入工號！")
-                        elif emp_id_input in EMP_DICT:
-                            emp_name = EMP_DICT[emp_id_input]
-                            borrower_info = f"{emp_name} ({emp_id_input})"
-                            borrow_card(card_id, borrower_info)
-                            st.success(f"✅ {card_id} 借用成功！借用人：{borrower_info}")
-                            st.rerun()
+                        if (
+                            borrower_selected
+                            == "-- 請選擇工號與姓名 --"
+                        ):
+                            st.warning("⚠️ 請選擇借用人！")
                         else:
-                            st.error("❌ 找不到此工號，請確認工號是否正確！")
+                            borrow_card(
+                                card_id,
+                                borrower_selected,
+                                note_input,
+                                custom_dt,
+                            )
+                            st.success(f"✅ {card_id} 借用成功！")
+                            st.rerun()
         else:
             with st.container(border=True):
                 st.subheader(f"🔴 {card_id}（借出中）")
-                st.write(f"**借用人**：{borrower}")
-                st.write(f"**借出時間**：{borrowed_at}")
-                if st.button("歸還卡片", key=f"return_{card_id}"):
-                    return_card(card_id, borrower)
-                    st.success(f"✅ {card_id} 已成功歸還！")
-                    st.rerun()
+                st.write(
+                    f"👤 **借用人**：{borrower} "
+                    + (f"（備註：{note}）" if note else "")
+                )
+                st.write(f"🕒 **借用時間**：{borrowed_at}")
+
+                with st.form(key=f"return_form_{card_id}"):
+                    return_note = st.text_input(
+                        "📝 歸還備註 (選填)", key=f"r_note_{card_id}"
+                    )
+                    col1, col2 = st.columns([1, 1])
+                    with col1:
+                        use_custom_r = st.checkbox(
+                            "⏰ 自訂實際歸還時間", key=f"r_chk_{card_id}"
+                        )
+                    with col2:
+                        custom_dt_r = None
+                        if use_custom_r:
+                            custom_dt_r = st.datetime_input(
+                                "選擇時間", key=f"r_dt_{card_id}"
+                            )
+
+                    submit_r = st.form_submit_button("歸還卡片")
+                    if submit_r:
+                        return_card(
+                            card_id, borrower, return_note, custom_dt_r
+                        )
+                        st.success(f"✅ {card_id} 已成功歸還！")
+                        st.rerun()
 
 with tab2:
     st.subheader("📜 歷史借還紀錄 (前50筆)")
     logs_res = (
         supabase.table("borrow_logs")
-        .select("timestamp, card_id, borrower, action")
+        .select("timestamp, created_at, card_id, borrower, action, note")
         .order("id", desc=True)
         .limit(50)
         .execute()
@@ -154,10 +210,12 @@ with tab2:
         for log in logs_res.data:
             formatted_logs.append(
                 {
-                    "時間": format_time(log["timestamp"]),
+                    "實際借還時間": log["timestamp"],
+                    "系統填單時間": log.get("created_at", log["timestamp"]),
                     "卡號": log["card_id"],
-                    "借用人": log["borrower"],
+                    "工號與姓名": log["borrower"],
                     "動作": "借出" if log["action"] == "BORROW" else "歸還",
+                    "備註": log.get("note") if log.get("note") else "-",
                 }
             )
         st.dataframe(formatted_logs, use_container_width=True)
