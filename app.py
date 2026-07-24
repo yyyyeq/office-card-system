@@ -10,27 +10,39 @@ st.set_page_config(
 )
 
 # 2. 初始化 Supabase 連線
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+try:
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+except Exception as e:
+    st.error(f"❌ Supabase 連線設定失敗，請檢查 Secrets：{e}")
+    st.stop()
 
 TAIPEI_TZ = pytz.timezone("Asia/Taipei")
 
 
-# 3. 載入員工名單
+# 3. 載入員工名單 (加強防呆)
 @st.cache_data
 def load_employees():
     try:
         df = pd.read_excel("employees.xlsx")
+        # 自動轉字串並過濾空白
         df["工號"] = df["工號"].astype(str).str.strip()
         df["姓名"] = df["姓名"].astype(str).str.strip()
-        df = df[(df["工號"] != "nan") & (df["姓名"] != "nan")]
+        df = df[
+            (df["工號"] != "nan")
+            & (df["姓名"] != "nan")
+            & (df["工號"] != "")
+            & (df["姓名"] != "")
+        ]
         emp_list = [
             f"{row['工號']} - {row['姓名']}" for _, row in df.iterrows()
         ]
         return emp_list
     except Exception as e:
-        st.error(f"⚠️ 讀取 employees.xlsx 失敗: {e}")
+        st.warning(
+            f"⚠️ 讀取 employees.xlsx 時遇到問題：{e}（系統將允許手動輸入）"
+        )
         return []
 
 
@@ -39,13 +51,17 @@ EMP_LIST = load_employees()
 
 # --- 輔助函式 ---
 def get_cards():
-    res = (
-        supabase.table("cards")
-        .select("*")
-        .order("card_id", desc=False)
-        .execute()
-    )
-    return res.data
+    try:
+        res = (
+            supabase.table("cards")
+            .select("*")
+            .order("card_id", desc=False)
+            .execute()
+        )
+        return res.data
+    except Exception as e:
+        st.error(f"❌ 讀取卡片資料庫失敗：{e}")
+        return []
 
 
 def borrow_card(card_id, borrower, note, custom_time):
@@ -113,6 +129,9 @@ tab1, tab2 = st.tabs(["📌 卡片借還", "📜 歷史紀錄"])
 
 with tab1:
     cards = get_cards()
+    if not cards:
+        st.info("💡 目前資料庫中沒有卡片資料，請確認 Supabase 的 cards 資料表。")
+
     for card in cards:
         card_id = card["card_id"]
         status = card["status"]
@@ -124,11 +143,17 @@ with tab1:
             with st.container(border=True):
                 st.subheader(f"🟢 {card_id}（可借用）")
                 with st.form(key=f"borrow_form_{card_id}"):
-                    borrower_selected = st.selectbox(
-                        "選擇工號與姓名",
-                        options=["-- 請選擇工號與姓名 --"] + EMP_LIST,
-                        key=f"select_{card_id}",
-                    )
+                    if EMP_LIST:
+                        borrower_selected = st.selectbox(
+                            "選擇工號與姓名",
+                            options=["-- 請選擇工號與姓名 --"] + EMP_LIST,
+                            key=f"select_{card_id}",
+                        )
+                    else:
+                        borrower_selected = st.text_input(
+                            "請輸入工號與姓名", key=f"input_{card_id}"
+                        )
+
                     note_input = st.text_input(
                         "📝 備註 (如：訪客姓名 / 補登說明)",
                         key=f"note_{card_id}",
@@ -149,10 +174,10 @@ with tab1:
                     submit = st.form_submit_button("確認借用")
                     if submit:
                         if (
-                            borrower_selected
-                            == "-- 請選擇工號與姓名 --"
+                            borrower_selected == "-- 請選擇工號與姓名 --"
+                            or not borrower_selected
                         ):
-                            st.warning("⚠️ 請選擇借用人！")
+                            st.warning("⚠️ 請選擇或輸入借用人！")
                         else:
                             borrow_card(
                                 card_id,
@@ -197,27 +222,38 @@ with tab1:
 
 with tab2:
     st.subheader("📜 歷史借還紀錄 (前50筆)")
-    logs_res = (
-        supabase.table("borrow_logs")
-        .select("timestamp, created_at, card_id, borrower, action, note")
-        .order("id", desc=True)
-        .limit(50)
-        .execute()
-    )
+    try:
+        logs_res = (
+            supabase.table("borrow_logs")
+            .select("timestamp, created_at, card_id, borrower, action, note")
+            .order("id", desc=True)
+            .limit(50)
+            .execute()
+        )
 
-    if logs_res.data:
-        formatted_logs = []
-        for log in logs_res.data:
-            formatted_logs.append(
-                {
-                    "實際借還時間": log["timestamp"],
-                    "系統填單時間": log.get("created_at", log["timestamp"]),
-                    "卡號": log["card_id"],
-                    "工號與姓名": log["borrower"],
-                    "動作": "借出" if log["action"] == "BORROW" else "歸還",
-                    "備註": log.get("note") if log.get("note") else "-",
-                }
-            )
-        st.dataframe(formatted_logs, use_container_width=True)
-    else:
-        st.info("尚無借還紀錄")
+        if logs_res.data:
+            formatted_logs = []
+            for log in logs_res.data:
+                formatted_logs.append(
+                    {
+                        "實際借還時間": log.get("timestamp", ""),
+                        "系統填單時間": log.get(
+                            "created_at", log.get("timestamp", "")
+                        ),
+                        "卡號": log.get("card_id", ""),
+                        "工號與姓名": log.get("borrower", ""),
+                        "動作": (
+                            "借出"
+                            if log.get("action") == "BORROW"
+                            else "歸還"
+                        ),
+                        "備註": (
+                            log.get("note") if log.get("note") else "-"
+                        ),
+                    }
+                )
+            st.dataframe(formatted_logs, use_container_width=True)
+        else:
+            st.info("尚無借還紀錄")
+    except Exception as e:
+        st.error(f"❌ 讀取歷史紀錄失敗：{e}")
