@@ -4,7 +4,7 @@ import pytz
 import streamlit as st
 from supabase import create_client
 
-# 1. 頁面基本設定 (寬頁面 layout="wide"，讓三張卡片並排)
+# 1. 頁面基本設定 (寬頁面 layout="wide")
 st.set_page_config(
     page_title="白卡借用系統", page_icon="💳", layout="wide"
 )
@@ -74,13 +74,18 @@ def get_cards():
         return []
 
 
-def borrow_card(card_id, borrower, note, custom_date, custom_time_val):
+def borrow_card(
+    card_id, borrower, note, is_custom, custom_date, custom_time_val
+):
     sys_now_str = datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
-    # 組合日期與時間
-    event_time = datetime.combine(
-        custom_date, custom_time_val
-    ).strftime("%Y-%m-%d %H:%M:%S")
+    # 有勾選補登才使用自訂時間，否則抓系統當下時間
+    if is_custom and custom_date and custom_time_val:
+        event_time = datetime.combine(
+            custom_date, custom_time_val
+        ).strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        event_time = sys_now_str
 
     supabase.table("cards").update(
         {
@@ -103,13 +108,17 @@ def borrow_card(card_id, borrower, note, custom_date, custom_time_val):
     ).execute()
 
 
-def return_card(card_id, borrower, note, custom_date, custom_time_val):
+def return_card(
+    card_id, borrower, note, is_custom, custom_date, custom_time_val
+):
     sys_now_str = datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
-    # 組合日期與時間
-    event_time = datetime.combine(
-        custom_date, custom_time_val
-    ).strftime("%Y-%m-%d %H:%M:%S")
+    if is_custom and custom_date and custom_time_val:
+        event_time = datetime.combine(
+            custom_date, custom_time_val
+        ).strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        event_time = sys_now_str
 
     supabase.table("cards").update(
         {
@@ -142,7 +151,6 @@ with tab1:
     if not cards:
         st.info("💡 目前資料庫中沒有卡片資料。")
     else:
-        # 3 欄式佈局，卡片並排呈現
         cols = st.columns(3)
 
         for idx, card in enumerate(cards):
@@ -162,6 +170,28 @@ with tab1:
                         st.subheader(f"🟢 {card_id}")
                         st.caption("狀態：可借用")
 
+                        # 1. 放在表單外的勾選框：勾選時頁面會即時刷新，跳出下方時間選單
+                        use_custom = st.checkbox(
+                            "⏰ 補登實際借用時間", key=f"chk_{card_id}"
+                        )
+
+                        c_date, c_time = None, None
+                        if use_custom:
+                            sub_col1, sub_col2 = st.columns(2)
+                            with sub_col1:
+                                c_date = st.date_input(
+                                    "📅 日期",
+                                    value=now_dt.date(),
+                                    key=f"d_{card_id}",
+                                )
+                            with sub_col2:
+                                c_time = st.time_input(
+                                    "⏰ 時間",
+                                    value=now_dt.time(),
+                                    key=f"t_{card_id}",
+                                )
+
+                        # 2. 主要輸入表單
                         with st.form(key=f"borrow_form_{card_id}"):
                             if EMP_LIST:
                                 borrower_selected = st.selectbox(
@@ -182,22 +212,6 @@ with tab1:
                                 key=f"note_{card_id}",
                             )
 
-                            # ⏰ 常駐顯示實際借用時間（預設為當下，補登可直接修改）
-                            st.caption("⏰ 實際借用時間（如需補登可直接修改）")
-                            sub_col1, sub_col2 = st.columns(2)
-                            with sub_col1:
-                                c_date = st.date_input(
-                                    "📅 日期",
-                                    value=now_dt.date(),
-                                    key=f"d_{card_id}",
-                                )
-                            with sub_col2:
-                                c_time = st.time_input(
-                                    "⏰ 時間",
-                                    value=now_dt.time(),
-                                    key=f"t_{card_id}",
-                                )
-
                             submit = st.form_submit_button(
                                 "確認借用", use_container_width=True
                             )
@@ -213,6 +227,7 @@ with tab1:
                                         card_id,
                                         borrower_selected,
                                         note_input,
+                                        use_custom,
                                         c_date,
                                         c_time,
                                     )
@@ -227,14 +242,14 @@ with tab1:
                             st.markdown(f"📝 **備註**：{note}")
                         st.markdown(f"🕒 **借用時間**：\n`{borrowed_at}`")
 
-                        with st.form(key=f"return_form_{card_id}"):
-                            return_note = st.text_input(
-                                "📝 歸還備註 (選填)",
-                                key=f"r_note_{card_id}",
-                            )
+                        # 1. 放在表單外的勾選框
+                        use_custom_r = st.checkbox(
+                            "⏰ 補登實際歸還時間",
+                            key=f"r_chk_{card_id}",
+                        )
 
-                            # ⏰ 常駐顯示實際歸還時間（預設為當下，補登可直接修改）
-                            st.caption("⏰ 實際歸還時間（如需補登可直接修改）")
+                        cr_date, cr_time = None, None
+                        if use_custom_r:
                             sub_col1, sub_col2 = st.columns(2)
                             with sub_col1:
                                 cr_date = st.date_input(
@@ -249,6 +264,13 @@ with tab1:
                                     key=f"rt_{card_id}",
                                 )
 
+                        # 2. 主要輸入表單
+                        with st.form(key=f"return_form_{card_id}"):
+                            return_note = st.text_input(
+                                "📝 歸還備註 (選填)",
+                                key=f"r_note_{card_id}",
+                            )
+
                             submit_r = st.form_submit_button(
                                 "歸還卡片", use_container_width=True
                             )
@@ -257,6 +279,7 @@ with tab1:
                                     card_id,
                                     borrower,
                                     return_note,
+                                    use_custom_r,
                                     cr_date,
                                     cr_time,
                                 )
