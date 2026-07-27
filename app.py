@@ -75,16 +75,12 @@ def get_cards():
 
 
 def borrow_card(card_id, borrower, note, custom_date, custom_time_val):
-    sys_now_dt = datetime.now(TAIPEI_TZ)
-    sys_now_str = sys_now_dt.strftime("%Y-%m-%d %H:%M:%S")
+    sys_now_str = datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
-    # 如果有填寫自訂時間，組合日期與時間；否則使用當下系統時間
-    if custom_date and custom_time_val:
-        event_time = datetime.combine(
-            custom_date, custom_time_val
-        ).strftime("%Y-%m-%d %H:%M:%S")
-    else:
-        event_time = sys_now_str
+    # 組合日期與時間
+    event_time = datetime.combine(
+        custom_date, custom_time_val
+    ).strftime("%Y-%m-%d %H:%M:%S")
 
     supabase.table("cards").update(
         {
@@ -108,15 +104,12 @@ def borrow_card(card_id, borrower, note, custom_date, custom_time_val):
 
 
 def return_card(card_id, borrower, note, custom_date, custom_time_val):
-    sys_now_dt = datetime.now(TAIPEI_TZ)
-    sys_now_str = sys_now_dt.strftime("%Y-%m-%d %H:%M:%S")
+    sys_now_str = datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
-    if custom_date and custom_time_val:
-        event_time = datetime.combine(
-            custom_date, custom_time_val
-        ).strftime("%Y-%m-%d %H:%M:%S")
-    else:
-        event_time = sys_now_str
+    # 組合日期與時間
+    event_time = datetime.combine(
+        custom_date, custom_time_val
+    ).strftime("%Y-%m-%d %H:%M:%S")
 
     supabase.table("cards").update(
         {
@@ -149,7 +142,7 @@ with tab1:
     if not cards:
         st.info("💡 目前資料庫中沒有卡片資料。")
     else:
-        # 建立 3 欄式佈局，讓卡片開頁面就橫向並排呈現
+        # 3 欄式佈局，卡片並排呈現
         cols = st.columns(3)
 
         for idx, card in enumerate(cards):
@@ -189,26 +182,21 @@ with tab1:
                                 key=f"note_{card_id}",
                             )
 
-                            # ⏰ 時間補登開關與填寫欄位
-                            need_custom = st.checkbox(
-                                "⏰ 補登實際借用時間", key=f"chk_{card_id}"
-                            )
-                            c_date, c_time = None, None
-
-                            if need_custom:
-                                sub_col1, sub_col2 = st.columns(2)
-                                with sub_col1:
-                                    c_date = st.date_input(
-                                        "📅 實際日期",
-                                        value=now_dt.date(),
-                                        key=f"d_{card_id}",
-                                    )
-                                with sub_col2:
-                                    c_time = st.time_input(
-                                        "⏰ 實際時間",
-                                        value=now_dt.time(),
-                                        key=f"t_{card_id}",
-                                    )
+                            # ⏰ 常駐顯示實際借用時間（預設為當下，補登可直接修改）
+                            st.caption("⏰ 實際借用時間（如需補登可直接修改）")
+                            sub_col1, sub_col2 = st.columns(2)
+                            with sub_col1:
+                                c_date = st.date_input(
+                                    "📅 日期",
+                                    value=now_dt.date(),
+                                    key=f"d_{card_id}",
+                                )
+                            with sub_col2:
+                                c_time = st.time_input(
+                                    "⏰ 時間",
+                                    value=now_dt.time(),
+                                    key=f"t_{card_id}",
+                                )
 
                             submit = st.form_submit_button(
                                 "確認借用", use_container_width=True
@@ -245,27 +233,21 @@ with tab1:
                                 key=f"r_note_{card_id}",
                             )
 
-                            # ⏰ 時間補登開關與填寫欄位
-                            need_custom_r = st.checkbox(
-                                "⏰ 補登實際歸還時間",
-                                key=f"r_chk_{card_id}",
-                            )
-                            cr_date, cr_time = None, None
-
-                            if need_custom_r:
-                                sub_col1, sub_col2 = st.columns(2)
-                                with sub_col1:
-                                    cr_date = st.date_input(
-                                        "📅 實際日期",
-                                        value=now_dt.date(),
-                                        key=f"rd_{card_id}",
-                                    )
-                                with sub_col2:
-                                    cr_time = st.time_input(
-                                        "⏰ 實際時間",
-                                        value=now_dt.time(),
-                                        key=f"rt_{card_id}",
-                                    )
+                            # ⏰ 常駐顯示實際歸還時間（預設為當下，補登可直接修改）
+                            st.caption("⏰ 實際歸還時間（如需補登可直接修改）")
+                            sub_col1, sub_col2 = st.columns(2)
+                            with sub_col1:
+                                cr_date = st.date_input(
+                                    "📅 日期",
+                                    value=now_dt.date(),
+                                    key=f"rd_{card_id}",
+                                )
+                            with sub_col2:
+                                cr_time = st.time_input(
+                                    "⏰ 時間",
+                                    value=now_dt.time(),
+                                    key=f"rt_{card_id}",
+                                )
 
                             submit_r = st.form_submit_button(
                                 "歸還卡片", use_container_width=True
